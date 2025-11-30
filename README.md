@@ -1,4 +1,4 @@
-ChatGPT said:Here’s a clean explanation of what each step does and how the whole setup works.
+Here’s a clean explanation of what each step does and how the whole setup works.
 This is a MemryX MCP (Model Context Protocol) server setup so that GitHub Copilot (or VS Code Copilot Agent) can query your custom server.
 
 ```bash
