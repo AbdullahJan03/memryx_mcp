@@ -11,7 +11,8 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 # Configuration
 DOCS_URL = "https://developer.memryx.com"
-GITHUB_REPO = "/home/abdullah/memryx-mcp/memryx_examples_repo"
+GITHUB_REPO_URL = "https://github.com/memryx/MemryX_eXamples.git"
+LOCAL_REPO_PATH = "./MemryX_eXamples"
 DB_PATH = "./memryx_knowledge_base"
 
 # Initialize Embedding Model & DB
@@ -138,19 +139,33 @@ def scrape_web_docs():
     return docs
 
 def scrape_github_code():
-    """Scrapes Python code with Syntax-Aware Parent-Child chunking."""
+    """
+    Clones the repo if missing, then scrapes Python code 
+    with Syntax-Aware Parent-Child chunking.
+    """
     code_snippets = []
     
-    if not os.path.exists(GITHUB_REPO):
-        print(f"Warning: {GITHUB_REPO} not found. Skipping code ingestion.")
-        return []
+    # --- Check and Clone Repo ---
+    if not os.path.exists(LOCAL_REPO_PATH):
+        print(f"Repository not found at {LOCAL_REPO_PATH}.")
+        print(f"Cloning from {GITHUB_REPO_URL}...")
+        try:
+            git.Repo.clone_from(GITHUB_REPO_URL, LOCAL_REPO_PATH)
+            print("Cloning complete.")
+        except Exception as e:
+            print(f"Failed to clone repository: {e}")
+            return []
+    else:
+        print(f"Repository found at {LOCAL_REPO_PATH}. Skipping clone.")
 
-    for filepath in glob.glob(f"{GITHUB_REPO}/**/*.py", recursive=True):
+    # --- Process Files ---
+    # Note: Using LOCAL_REPO_PATH for glob, not the URL
+    print(f"Processing Python files in {LOCAL_REPO_PATH}...")
+    for filepath in glob.glob(f"{LOCAL_REPO_PATH}/**/*.py", recursive=True):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
                 
-            # Apply Parent-Child Splitting (Python Mode)
             chunks = get_parent_child_chunks(content, filepath, "code")
             code_snippets.extend(chunks)
         except Exception as e:
