@@ -6,7 +6,7 @@ python -m venv mxmcp
 source mxmcp/bin/activate  
 
 # Install required libraries
-pip install mcp[cli] beautifulsoup4 requests lancedb sentence-transformers gitpython
+pip install mcp[cli] beautifulsoup4 requests lancedb sentence-transformers gitpython langchain-text-splitters
 ```
 
 ```bash
@@ -32,7 +32,7 @@ touch mcp.json
 	"servers": {
 		"memryx": {
 			"type": "stdio",
-			"command": "/home/abdullah/memryx-mcp/.venv/bin/python",
+			"command": "/home/abdullah/memryx-mcp/mxmcp/bin/python",
 			"args": [
 				"/home/abdullah/memryx-mcp/server.py"
 			]
