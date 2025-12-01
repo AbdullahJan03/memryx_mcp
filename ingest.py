@@ -7,15 +7,57 @@ import git
 import glob
 import time
 from urllib.parse import urljoin
+from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
 
 # Configuration
 DOCS_URL = "https://developer.memryx.com"
-GITHUB_REPO = "https://github.com/memryx/MemryX_eXamples.git"
+GITHUB_REPO = "/home/abdullah/memryx-mcp/memryx_examples_repo"
 DB_PATH = "./memryx_knowledge_base"
 
 # Initialize Embedding Model & DB
-model = SentenceTransformer('all-MiniLM-L6-v2')
+model = SentenceTransformer('BAAI/bge-m3')
 db = lancedb.connect(DB_PATH)
+
+def get_parent_child_chunks(text: str, source: str, doc_type: str):
+    """
+    Implements 'Parent Document Retrieval' (Small-to-Big).
+    1. Parent Splitter: Creates large context blocks (e.g., full functions/classes).
+    2. Child Splitter: Creates small, dense vectors from the parent.
+    We search against 'child', but return 'parent'.
+    """
+    # Determine language based on doc_type
+    language = Language.CPP if doc_type.lower() in ['cpp', 'c++', 'cc', 'h', 'hpp'] else Language.PYTHON
+    
+    # 1. Parent Splitting (Large Context)
+    parent_splitter = RecursiveCharacterTextSplitter.from_language(
+        language=language,
+        chunk_size=2000,
+        chunk_overlap=200
+    )
+    
+    # 2. Child Splitting (Search Index)
+    # Using generic splitter is fine for small chunks
+    child_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400,
+        chunk_overlap=50
+    )
+    
+    parents = parent_splitter.create_documents([text])
+    processed_chunks = []
+    
+    for parent in parents:
+        parent_content = parent.page_content
+        children = child_splitter.create_documents([parent_content])
+        
+        for child in children:
+            processed_chunks.append({
+                "text": child.page_content,
+                "parent_context": parent_content,
+                "source": source,
+                "type": doc_type
+            })
+    
+    return processed_chunks
 
 def scrape_web_docs():
     """Scrapes the main MemryX developer hub.
@@ -25,7 +67,6 @@ def scrape_web_docs():
     pages one-by-one.
     """
 
-    # Keep a small list of non-tutorial pages we still want to index.
     pages = [
         "/api/accelerator/python.html",
         "/api/accelerator/cpp.html",
@@ -40,7 +81,6 @@ def scrape_web_docs():
     ]
 
     def get_tutorial_pages():
-        """Fetch the tutorials index and return a deduplicated list of full tutorial URLs after #tutorials section."""
         index_url = urljoin(DOCS_URL, "/tutorials/tutorials.html")
         try:
             resp = requests.get(index_url, timeout=10)
@@ -71,90 +111,83 @@ def scrape_web_docs():
                 if href_clean and not href_clean.startswith('/'):
                     href_clean = f"/tutorials/{href_clean}"
                 
-            print(links)
-            print(f"Discovered {len(links)} tutorial pages.")
             return sorted(links)
         except Exception as e:
             print(f"Failed to fetch tutorial index {index_url}: {e}")
             return []
 
     docs = []
-
-    # Add discovered tutorial pages (full URLs)
-    tutorial_pages = get_tutorial_pages()
-    for t in tutorial_pages:
-        pages.append(t)
-
+    pages.extend(get_tutorial_pages())
     for page in pages:
-
-        url = page if page.startswith('http') else urljoin(DOCS_URL, page)
+        url = urljoin(DOCS_URL, page)
         try:
             resp = requests.get(url, timeout=10)
             soup = BeautifulSoup(resp.content, 'html.parser')
-            for script in soup(["script", "style"]):
+            for script in soup(["script", "style", "nav", "footer"]):
                 script.extract()
+            
+            # Clean text
             text = soup.get_text(separator=' ', strip=True)
-            docs.append({"text": text, "source": url, "type": "documentation"})
-            # be polite to the server
+            
+            # Apply Parent-Child Splitting
+            chunks = get_parent_child_chunks(text, url, "documentation")
+            docs.extend(chunks)
             time.sleep(0.1)
         except Exception as e:
             print(f"Failed to scrape {url}: {e}")
     return docs
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
-    """Split text into overlapping chunks to preserve context."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        
-        # Try to break at paragraph/sentence boundaries
-        if end < len(text):
-            last_period = chunk.rfind('. ')
-            last_newline = chunk.rfind('\n')
-            break_point = max(last_period, last_newline)
-            if break_point > chunk_size * 0.7:  
-                end = start + break_point + 1
-        
-        chunks.append(text[start:end])
-        start = end - overlap  # Overlap for context
-    
-    return chunks
 
 def scrape_github_code():
-    repo_path = "./memryx_examples_repo"
+    """Scrapes Python code with Syntax-Aware Parent-Child chunking."""
     code_snippets = []
-    for filepath in glob.glob(f"{repo_path}/**/*.py", recursive=True):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
+    
+    if not os.path.exists(GITHUB_REPO):
+        print(f"Warning: {GITHUB_REPO} not found. Skipping code ingestion.")
+        return []
+
+    for filepath in glob.glob(f"{GITHUB_REPO}/**/*.py", recursive=True):
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+                
+            # Apply Parent-Child Splitting (Python Mode)
+            chunks = get_parent_child_chunks(content, filepath, "code")
+            code_snippets.extend(chunks)
+        except Exception as e:
+            print(f"Error reading {filepath}: {e}")
             
-            # Chunk with overlap
-            chunks = chunk_text(content, chunk_size=1200, overlap=200)
-            for i, chunk in enumerate(chunks):
-                code_snippets.append({
-                    "text": chunk,
-                    "source": f"{filepath}#chunk{i}",
-                    "type": "code",
-                    "language": "python"
-                })
     return code_snippets
 
 def create_index():
-    data = scrape_web_docs() + scrape_github_code()
+
+    web_data = scrape_web_docs()
+    code_data = scrape_github_code()
+    all_data = web_data + code_data
     
-    # Create vector embeddings
-    print("Creating embeddings...")
-    vectors = model.encode([d['text'] for d in data])
+    if not all_data:
+        print("Error: No data to index. Exiting.")
+        return
+
+    print(f"Processing {len(all_data)} child chunks...")
+
+    batch_size = 32
+    vectors = []
+    texts = [d['text'] for d in all_data]
+    
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        batch_vectors = model.encode(batch)
+        vectors.extend(batch_vectors)
     
     data_with_vectors = []
-    for i, item in enumerate(data):
+    for i, item in enumerate(all_data):
         item['vector'] = vectors[i]
         data_with_vectors.append(item)
     
-    # Create table
     try:
         tbl = db.create_table("memryx_docs", data=data_with_vectors, mode="overwrite")
-        tbl.create_fts_index("text", replace=True)  # Enable keyword search
+        # Full Text Search on the CHILD text (for precision)
+        tbl.create_fts_index("text", replace=True) 
     except Exception as e:
         print(f"Error creating table: {e}")
 
