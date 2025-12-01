@@ -100,25 +100,43 @@ def scrape_web_docs():
         except Exception as e:
             print(f"Failed to scrape {url}: {e}")
     return docs
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200):
+    """Split text into overlapping chunks to preserve context."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        
+        # Try to break at paragraph/sentence boundaries
+        if end < len(text):
+            last_period = chunk.rfind('. ')
+            last_newline = chunk.rfind('\n')
+            break_point = max(last_period, last_newline)
+            if break_point > chunk_size * 0.7:  
+                end = start + break_point + 1
+        
+        chunks.append(text[start:end])
+        start = end - overlap  # Overlap for context
+    
+    return chunks
 
 def scrape_github_code():
-    """Clones the examples repo to index actual code."""
     repo_path = "./memryx_examples_repo"
-    if not os.path.exists(repo_path):
-        print("Cloning GitHub examples...")
-        git.Repo.clone_from(GITHUB_REPO, repo_path)
-    
     code_snippets = []
-    # Index Python and C++ files
     for filepath in glob.glob(f"{repo_path}/**/*.py", recursive=True):
         with open(filepath, 'r', encoding='utf-8') as f:
             content = f.read()
-            # Chunking large files is recommended here
-            code_snippets.append({
-                "text": content[:2000], # Simple truncation for brevity in this example
-                "source": filepath,
-                "type": "code"
-            })
+            
+            # Chunk with overlap
+            chunks = chunk_text(content, chunk_size=1200, overlap=200)
+            for i, chunk in enumerate(chunks):
+                code_snippets.append({
+                    "text": chunk,
+                    "source": f"{filepath}#chunk{i}",
+                    "type": "code",
+                    "language": "python"
+                })
     return code_snippets
 
 def create_index():
@@ -136,7 +154,7 @@ def create_index():
     # Create table
     try:
         tbl = db.create_table("memryx_docs", data=data_with_vectors, mode="overwrite")
-        print(f"Indexed {len(data)} documents.")
+        tbl.create_fts_index("text", replace=True)  # Enable keyword search
     except Exception as e:
         print(f"Error creating table: {e}")
 

@@ -23,6 +23,36 @@ try:
 except Exception as e:
     sys.exit(1)
 
+def _merge_results(semantic_results, keyword_results, top_k=3, k=60):
+    """
+    Reciprocal Rank Fusion - combines rankings from different retrieval methods.
+    
+    Formula: score = sum(1 / (k + rank)) for each result list
+    
+    Args:
+        k: constant (typically 60) to prevent division by zero and reduce impact of high ranks
+    """
+    scores = {}
+    
+    # Score semantic results
+    for rank, result in enumerate(semantic_results, start=1):
+        source = result['source']
+        if source not in scores:
+            scores[source] = {'result': result, 'score': 0}
+        scores[source]['score'] += 1 / (k + rank)
+    
+    # Score keyword results
+    for rank, result in enumerate(keyword_results, start=1):
+        source = result['source']
+        if source not in scores:
+            scores[source] = {'result': result, 'score': 0}
+        scores[source]['score'] += 1 / (k + rank)
+    
+    # Sort by combined score
+    merged = sorted(scores.values(), key=lambda x: x['score'], reverse=True)
+    
+    return [item['result'] for item in merged[:top_k]]
+
 @mcp.tool()
 def search_memryx_docs(query: str) -> str:
     """
@@ -32,12 +62,13 @@ def search_memryx_docs(query: str) -> str:
     Args:
         query: The specific programming question or concept to search for.
     """
+
     try:
         query_vec = model.encode([query])[0]
-        results = tbl.search(query_vec).limit(3).to_list()
-        
-        if not results:
-            return "No results found in MemryX docs."
+        semantic_results = tbl.search(query_vec).limit(5).to_list()
+        keyword_results = tbl.search(query, query_type="fts").limit(5).to_list()
+            
+        results = _merge_results(semantic_results, keyword_results)
 
         response = "Found the following MemryX resources:\n\n"
         for res in results:
